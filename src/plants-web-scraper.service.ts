@@ -13,8 +13,8 @@ export class PlantsWebScraperService {
   private readonly _ngDestroy$: Subject<void> = new Subject<void>();
   private readonly _csvWriter$: Subject<string> = new Subject<string>();
   private readonly _browserRequest$: Observable<Browser> = from(puppeteer.launch({
-    headless: false,
-    slowMo: 100,
+    headless: true,
+    slowMo: 50,
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
   })).pipe(
     shareReplay(1),
@@ -50,7 +50,7 @@ export class PlantsWebScraperService {
       switchMap(([ids, browser]: [ReadonlyArray<string>, Browser]) =>
         zip(
           from(ids),
-          interval(1000)
+          interval(500)
         ).pipe(
           switchMap(([id, _]) => this.writeSpeciesRxjs(browser, id)))
       ),
@@ -93,7 +93,6 @@ export class PlantsWebScraperService {
   }
 
   private writeSpeciesRxjs(browser: Browser, id: string): Observable<void> {
-    console.log('start rxjs', id);
     return defer(() => (this.writeSpecies(browser, id)));
   }
 
