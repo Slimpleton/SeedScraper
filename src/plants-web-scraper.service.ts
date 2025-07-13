@@ -1,12 +1,14 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
-import { catchError, defer, first, forkJoin, from, interval, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap, zip } from 'rxjs';
+import { catchError, defer, first, forkJoin, from, interval, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap, zip } from 'rxjs';
 import { GovPlantsDataService } from './PLANTS_data.service';
 import fs from 'fs';
 
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
-  private readonly _NEW_PAGE_INTERVAL_MS = 2000;
+  private readonly _CONCURRENT_REQUESTS: number = 5;
+  private reaodnly _DOWNLOAD_TIMEOUT_TIME: number : 1 * 60 * 1000;
+
   private readonly _CSVName: string = 'PLANTS_EXTRA_DATA.csv';
   private readonly _CSVHeaders: string[] = ['Accepted Symbol', 'Counties', 'Common Name'];
   private readonly _PlantProfileHeaderName: string = 'plant-profile-header';
@@ -49,12 +51,7 @@ export class PlantsWebScraperService {
         return forkJoin([of(ids), this._browserRequest$]);
       }),
       switchMap(([ids, browser]: [ReadonlyArray<string>, Browser]) =>
-        zip(
-          from(ids),
-          interval(this._NEW_PAGE_INTERVAL_MS)
-        ).pipe(
-          switchMap(([id, _]) => this.writeSpeciesRxjs(browser, id)))
-      ),
+        from(ids).pipe(mergeMap((id) => this.writeSpeciesRxjs(browser, id), this._CONCURRENT_REQUESTS))),
       catchError((err: any) => {
         console.error(err);
         return of();
@@ -66,6 +63,9 @@ export class PlantsWebScraperService {
   private async writeSpecies(browser: Browser, id: string) {
     const page = await browser.newPage();
     await page.goto(`${this.usdaGovPlantProfileUrl}${id}`);
+    page.setRequestInterception(true);
+    const client = await page.
+
 
     const downloadLinkClass = '.download-distribution-link';
     const linkElement = await page.waitForSelector(downloadLinkClass);
@@ -73,26 +73,12 @@ export class PlantsWebScraperService {
 
     const downloadButton = await page.waitForSelector('a[download]');
     if (downloadButton) {
-      const newTabUrl: string = await page.evaluate((downloadButton: Element) => {
-        const tabUrl: string | null = downloadButton.getAttribute('download');
-        if (tabUrl == null)
-          throw new Error('null download');
-
-        return tabUrl;
-      }, downloadButton);
-
-      // TODO contains the name of the csv for some reason god this is hard
-      console.log(newTabUrl);
-
+      const newTabUrl: string | null = await page.evaluate((downloadButton: Element) => downloadButton.getAttribute('href'), downloadButton);
       await downloadButton.click();
-      const popup = await browser.waitForTarget((target) => target.url().includes(newTabUrl));
-      const popupPage = await popup.asPage();
-      popupPage.setRequestInterception(true);
-      const json = popupPage.on('request', async (request) => { 
-          return await request.response()?.text();
-       });
 
-       console.log(json);
+
+
+      console.log(json);
     }
 
     const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
