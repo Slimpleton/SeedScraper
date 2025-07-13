@@ -7,7 +7,7 @@ import path from 'path';
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
-  private readonly _CONCURRENT_REQUESTS: number = 5;
+  private readonly _CONCURRENT_REQUESTS: number = 10;
   private readonly _DOWNLOAD_TIMEOUT_TIME: number = 1 * 60 * 1000;
   private readonly _DISTRIBUTION_DATA_HEADER: string = 'DistributionData';
   private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
