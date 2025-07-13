@@ -1,13 +1,16 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
-import { catchError, defer, first, forkJoin, from, interval, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap, zip } from 'rxjs';
+import puppeteer, { Browser, HTTPResponse } from 'puppeteer';
+import { catchError, defer, forkJoin, from, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
 import { GovPlantsDataService } from './PLANTS_data.service';
 import fs from 'fs';
+import path from 'path';
 
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
   private readonly _CONCURRENT_REQUESTS: number = 5;
-  private reaodnly _DOWNLOAD_TIMEOUT_TIME: number : 1 * 60 * 1000;
+  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 1 * 60 * 1000;
+  private readonly _DISTRIBUTION_DATA_HEADER: string = 'DistributionData';
+  private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
 
   private readonly _CSVName: string = 'PLANTS_EXTRA_DATA.csv';
   private readonly _CSVHeaders: string[] = ['Accepted Symbol', 'Counties', 'Common Name'];
@@ -16,7 +19,7 @@ export class PlantsWebScraperService {
   private readonly _ngDestroy$: Subject<void> = new Subject<void>();
   private readonly _csvWriter$: Subject<string> = new Subject<string>();
   private readonly _browserRequest$: Observable<Browser> = from(puppeteer.launch({
-    headless: false,
+    headless: true,
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
   })).pipe(
     shareReplay(1),
@@ -63,22 +66,44 @@ export class PlantsWebScraperService {
   private async writeSpecies(browser: Browser, id: string) {
     const page = await browser.newPage();
     await page.goto(`${this.usdaGovPlantProfileUrl}${id}`);
-    page.setRequestInterception(true);
-    const client = await page.
+    let download: Promise<void> = new Promise((_, reject) => setTimeout(() => reject, this._DOWNLOAD_TIMEOUT_TIME));
 
+    page.setRequestInterception(true);
+    const client = await page.createCDPSession();
+    await client.send('Page.setDownloadBehavior', {
+      behavior: 'deny', // Prevent automatic downloads
+    });
+
+    page.on('request', (request) => {
+      request.continue();
+    });
+
+    page.on(('response'), async (response: HTTPResponse) => {
+      if (PlantsWebScraperService.isValidCSV(response)) {
+        const csvData = await response.text();
+
+        // Save with unique filename
+        const filename = `${id}.${this._DISTRIBUTION_DATA_HEADER}.csv`;
+        const filepath = path.resolve(this._TEMP_DOWNLOAD_PATH, filename);
+        fs.writeFileSync(filepath, csvData);
+      }
+    });
 
     const downloadLinkClass = '.download-distribution-link';
     const linkElement = await page.waitForSelector(downloadLinkClass);
+
     await linkElement?.click();
 
     const downloadButton = await page.waitForSelector('a[download]');
     if (downloadButton) {
-      const newTabUrl: string | null = await page.evaluate((downloadButton: Element) => downloadButton.getAttribute('href'), downloadButton);
-      await downloadButton.click();
-
-
-
-      console.log(json);
+      const newTabUrl: string | null = await page.evaluate((downloadButton: HTMLAnchorElement) => downloadButton.href, downloadButton);
+      console.log(newTabUrl);
+      if (newTabUrl) {
+        await downloadButton.click();
+      }
+      else {
+        download = Promise.reject('invalid download');
+      }
     }
 
     const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
@@ -101,12 +126,20 @@ export class PlantsWebScraperService {
         return "";
       }, parentElement);
 
+      await download;
       const csvRow: string = `"${id}","${null}","${commonName}"`;
       this._csvWriter$.next(csvRow);
       console.log(csvRow);
     }
 
     await page.close();
+
+  }
+
+  private static isValidCSV(response: HTTPResponse): boolean {
+    return response.url().includes('csv') ||
+      response.url().includes('DistributionData') ||
+      response.headers()['content-type']?.includes('text/csv');
   }
 
   private writeSpeciesRxjs(browser: Browser, id: string): Observable<void> {
