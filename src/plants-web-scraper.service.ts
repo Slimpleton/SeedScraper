@@ -81,17 +81,15 @@ export class PlantsWebScraperService {
     page.on(('response'), async (response: HTTPResponse) => {
       if (PlantsWebScraperService.isValidCSV(response)) {
         const csvData = await response.text();
-
-        // Save with unique filename
         const filename = `${id}.${this._DISTRIBUTION_DATA_HEADER}.csv`;
         const filepath = path.resolve(this._TEMP_DOWNLOAD_PATH, filename);
         fs.writeFileSync(filepath, csvData);
+        download = Promise.resolve()
       }
     });
 
     const downloadLinkClass = '.download-distribution-link';
     const linkElement = await page.waitForSelector(downloadLinkClass);
-
     await linkElement?.click();
 
     const downloadButton = await page.waitForSelector('a[download]');
@@ -117,9 +115,7 @@ export class PlantsWebScraperService {
           if (childElement &&
             childElement.tagName === 'H2' &&
             childElement.textContent?.trim()) {
-
-            const escapedText = childElement.textContent.trim().replace(/"/g, '""');
-            return escapedText;
+            return childElement.textContent.trim().replace(/"/g, '""');
           }
         }
 
