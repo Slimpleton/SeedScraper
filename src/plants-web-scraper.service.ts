@@ -26,6 +26,8 @@ export class PlantsWebScraperService {
     takeUntil(this._ngDestroy$));
 
 
+  private readonly _INVALID_DOWNLOAD = 'invalid download';
+
   constructor(private readonly _plantDataService: GovPlantsDataService) {
     this._csvWriter$.pipe(
       tap((value) => {
@@ -67,6 +69,7 @@ export class PlantsWebScraperService {
     const page = await browser.newPage();
     await page.goto(`${this.usdaGovPlantProfileUrl}${id}`);
     let download: Promise<void> = new Promise((_, reject) => setTimeout(() => reject, this._DOWNLOAD_TIMEOUT_TIME));
+    let commonName: string = '';
 
     page.setRequestInterception(true);
     const client = await page.createCDPSession();
@@ -95,18 +98,17 @@ export class PlantsWebScraperService {
     const downloadButton = await page.waitForSelector('a[download]');
     if (downloadButton) {
       const newTabUrl: string | null = await page.evaluate((downloadButton: HTMLAnchorElement) => downloadButton.href, downloadButton);
-      console.log(newTabUrl);
-      if (newTabUrl) {
+      if (newTabUrl.endsWith('undefined')) {
+        download = Promise.resolve();
+        console.log('invalid file download for ', id);
+      }
+      else
         await downloadButton.click();
-      }
-      else {
-        download = Promise.reject('invalid download');
-      }
     }
 
     const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
     if (parentElement) {
-      const commonName = await page.evaluate((parentEl: Element) => {
+      commonName = await page.evaluate((parentEl: Element) => {
         const childrenElements = parentEl.children;
 
         for (let i = 1; i < childrenElements.length; i++) {
@@ -114,22 +116,23 @@ export class PlantsWebScraperService {
 
           if (childElement &&
             childElement.tagName === 'H2' &&
-            childElement.textContent?.trim()) {
+            childElement.textContent?.trim() &&
+            childElement.textContent.trim() !== 'Subheader') {
             return childElement.textContent.trim().replace(/"/g, '""');
           }
         }
 
         return "";
       }, parentElement);
-
-      await download;
-      const csvRow: string = `"${id}","${null}","${commonName}"`;
-      this._csvWriter$.next(csvRow);
-      console.log(csvRow);
     }
 
-    await page.close();
+    // TODO insert downlaod parse in the positive callback ? or do anotehr promise
+    await download;
 
+    const csvRow: string = `"${id}","${null}","${commonName}"`;
+    this._csvWriter$.next(csvRow);
+
+    await page.close();
   }
 
   private static isValidCSV(response: HTTPResponse): boolean {
