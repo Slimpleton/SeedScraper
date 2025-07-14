@@ -1,4 +1,4 @@
-import puppeteer, { Browser, HTTPResponse } from 'puppeteer';
+import puppeteer, { Browser, ElementHandle, HTTPResponse, Page } from 'puppeteer';
 import { catchError, defer, forkJoin, from, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
 import { GovPlantsDataService } from './PLANTS_data.service';
 import fs from 'fs';
@@ -24,9 +24,6 @@ export class PlantsWebScraperService {
   })).pipe(
     shareReplay(1),
     takeUntil(this._ngDestroy$));
-
-
-  private readonly _INVALID_DOWNLOAD = 'invalid download';
 
   constructor(private readonly _plantDataService: GovPlantsDataService) {
     this._csvWriter$.pipe(
@@ -68,7 +65,7 @@ export class PlantsWebScraperService {
   private async writeSpecies(browser: Browser, id: string) {
     const page = await browser.newPage();
     await page.goto(`${this.usdaGovPlantProfileUrl}${id}`);
-    let download: Promise<void> = new Promise((_, reject) => setTimeout(() => reject, this._DOWNLOAD_TIMEOUT_TIME));
+    let download: Promise<void> = new Promise((_, reject) => setTimeout(() => reject(id), this._DOWNLOAD_TIMEOUT_TIME));
     let commonName: string = '';
 
     page.setRequestInterception(true);
@@ -91,20 +88,21 @@ export class PlantsWebScraperService {
       }
     });
 
+    // TODO Might not have one if the link is broken
     const downloadLinkClass = '.download-distribution-link';
     const linkElement = await page.waitForSelector(downloadLinkClass);
     await linkElement?.click();
 
-    const downloadButton = await page.waitForSelector('a[download]');
-    if (downloadButton) {
-      const newTabUrl: string | null = await page.evaluate((downloadButton: HTMLAnchorElement) => downloadButton.href, downloadButton);
-      if (newTabUrl.endsWith('undefined')) {
-        download = Promise.resolve();
-        console.log('invalid file download for ', id);
-      }
-      else
-        await downloadButton.click();
+    const downloadButton = await page.waitForSelector('a[download]')
+      .catch((reason: any) => console.error(reason));
+
+    if (downloadButton && !(await page.evaluate((downloadButton: HTMLAnchorElement) => downloadButton.href, downloadButton)).endsWith('undefined'))
+      await downloadButton.click();
+    else {
+      download = Promise.resolve();
+      console.log('invalid file download for ', id);
     }
+
 
     const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
     if (parentElement) {
@@ -126,8 +124,9 @@ export class PlantsWebScraperService {
       }, parentElement);
     }
 
-    // TODO insert downlaod parse in the positive callback ? or do anotehr promise
     await download;
+
+    // TODO parse the csv and deleteio ?? 
 
     const csvRow: string = `"${id}","${null}","${commonName}"`;
     this._csvWriter$.next(csvRow);
