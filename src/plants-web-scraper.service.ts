@@ -74,25 +74,25 @@ export class PlantsWebScraperService {
     const downloadButton = await page.waitForSelector('a[download]');
     if (downloadButton) {
       const newTabUrl: string = await page.evaluate((downloadButton: Element) => {
-        const tabUrl: string | null = downloadButton.getAttribute('download');
+        const tabUrl: string | null = downloadButton.getAttribute('href');
         if (tabUrl == null)
           throw new Error('null download');
 
         return tabUrl;
       }, downloadButton);
 
-      // TODO contains the name of the csv for some reason god this is hard
       console.log(newTabUrl);
 
-      await downloadButton.click();
-      const popup = await browser.waitForTarget((target) => target.url().includes(newTabUrl));
+      const popup = await downloadButton.click().then(() =>
+        browser.waitForTarget((target) => target.url().includes(newTabUrl)));
+
       const popupPage = await popup.asPage();
       popupPage.setRequestInterception(true);
-      const json = popupPage.on('request', async (request) => { 
-          return await request.response()?.text();
-       });
+      const json = popupPage.on('request', async (request) => {
+        return await request.response()?.text();
+      });
 
-       console.log(json);
+      console.log(json);
     }
 
     const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
