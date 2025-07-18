@@ -131,6 +131,7 @@ export class PlantsWebScraperService {
       console.log('Skipping csv writing for ' + id, reason);
       return;
     });
+
     const data: string[] = await PlantsWebScraperService.pullDataAndDeleteCSV(path.resolve(this._TEMP_DOWNLOAD_PATH, id + this._CSVExtension));
     await page.close();
 
@@ -141,11 +142,11 @@ export class PlantsWebScraperService {
     const countyNames: string[]= [];
     const countyFIPs: number[] = [];
     for(let i = 1; i < data.length; i++){
-      const row: string = data[i];
-      const values : string[] = row.split(',');
+      const values : string[] = data[i].split(',');
       // Skip the empty county rows
       if(values[4]?.length == 0)
         continue;
+
       countyNames.push(values[4]);
       countyFIPs.push(Number.parseInt(values[5]));
     }
@@ -155,34 +156,32 @@ export class PlantsWebScraperService {
     // TODO would this be easier to read as a json?? idk everything else is csv it would suck to change it up
     // Json would save extra space by reducing duplicate rows // More objectlike
     // csv is less changes
-    
+    // use a record perhaps and then jsonify it ? would make parsing into an object easier later for us
+
     const csvRow: string = `${id},${commonName},"${countyFIPs}","${countyNames}"`;
     this._csvWriter$.next(csvRow);
   }
 
   private static async pullDataAndDeleteCSV(path: string): Promise<string[]> {
-    if(!fs.existsSync(path))
-      return [];
-    const fileStream = fs.createReadStream(path);
     const lines: string[] = [];
+    if(!fs.existsSync(path))
+      return lines;
+    const fileStream = fs.createReadStream(path);
     const rl = readline.createInterface({
       input: fileStream,
       crlfDelay: Infinity
     });
     // Note: we use the crlfDelay option to recognize all instances of CR LF
-    // ('\r\n') in input.txt as a single line break.
 
-
+    // Each line in file will be successively available here as `line`.
     for await (const line of rl) {
-      // Each line in input.txt will be successively available here as `line`.
       lines.push(line);
     }
-
     fileStream.close();
     fs.unlinkSync(path);
+
     return lines;
   }
-
 
   private static isValidCSV(response: HTTPResponse): boolean {
     return response.url().includes('csv') ||
