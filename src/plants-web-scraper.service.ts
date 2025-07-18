@@ -1,20 +1,22 @@
-import puppeteer, { Browser, ElementHandle, HTTPResponse, Page } from 'puppeteer';
+import puppeteer, { Browser, HTTPResponse } from 'puppeteer';
 import { catchError, defer, forkJoin, from, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
 import { GovPlantsDataService } from './PLANTS_data.service';
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
 
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
   private readonly _CONCURRENT_REQUESTS: number = 10;
-  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 1 * 60 * 1000;
-  private readonly _DISTRIBUTION_DATA_HEADER: string = 'DistributionData';
+  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 5 * 60 * 1000; // 5 min
+  private readonly _DISTRIBUTION_DATA_HEADER: string = 'Distribution Data';
   private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
-
-  private readonly _CSVName: string = 'PLANTS_EXTRA_DATA.csv';
-  private readonly _CSVHeaders: string[] = ['Accepted Symbol', 'Counties', 'Common Name'];
   private readonly _PlantProfileHeaderName: string = 'plant-profile-header';
+
+  private readonly _CSVExtension: string = '.csv';
+  private readonly _CSVName: string = 'PLANTS_EXTRA_DATA' + this._CSVExtension;
+  private readonly _CSVHeaders: string[] = ['Accepted Symbol', 'Common Name', 'County FIPS', "County Name"];
   private readonly _csvPath = './assets/' + this._CSVName;
   private readonly _ngDestroy$: Subject<void> = new Subject<void>();
   private readonly _csvWriter$: Subject<string> = new Subject<string>();
@@ -37,7 +39,7 @@ export class PlantsWebScraperService {
 
   public write(): Observable<any> {
     const escapedHeaders = this._CSVHeaders.map((x: string) => '"' + x + '"').join(',') + '\r\n';
-    const allIdsCSVPath = './assets/allIds.csv';
+    const allIdsCSVPath = './assets/allIds' + this._CSVExtension;
 
     return this._plantDataService.getAllNativePlantIds().pipe(
       switchMap((ids: ReadonlyArray<string>) => {
@@ -80,9 +82,10 @@ export class PlantsWebScraperService {
 
     page.on(('response'), async (response: HTTPResponse) => {
       if (PlantsWebScraperService.isValidCSV(response)) {
-        const csvData = await response.text();
-        const filename = `${id}.${this._DISTRIBUTION_DATA_HEADER}.csv`;
+        let csvData = await response.text();
+        const filename = id + this._CSVExtension;
         const filepath = path.resolve(this._TEMP_DOWNLOAD_PATH, filename);
+        csvData = csvData.substring(this._DISTRIBUTION_DATA_HEADER.length + 2);
         fs.writeFileSync(filepath, csvData);
         download = Promise.resolve()
       }
@@ -102,7 +105,6 @@ export class PlantsWebScraperService {
       download = Promise.resolve();
       console.log('invalid file download for ', id);
     }
-
 
     const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
     if (parentElement) {
@@ -124,15 +126,51 @@ export class PlantsWebScraperService {
       }, parentElement);
     }
 
-    await download;
+    await download.catch(async () => {
+      console.log('Skipping csv writing for ' + id);
+      await page.close();
+      return;
+    });
+    const data: string[] = await PlantsWebScraperService.pullDataAndDeleteCSV(path.resolve(this._TEMP_DOWNLOAD_PATH, id + this._CSVExtension));
+    const countyNames: string[]= [];
+    const countyFIPs: number[] = [];
+    for(let i = 1; i < data.length; i++){
+      const row: string = data[i];
+      const values : string[] = row.split(',');
+      // Skip the empty county rows
+      if(values[4]?.length == 0)
+        continue;
+      countyNames.push(values[4]);
+      countyFIPs.push(Number.parseInt(values[5]));
+    }
 
-    // TODO parse the csv and deleteio ?? 
-
-    const csvRow: string = `"${id}","${null}","${commonName}"`;
+    const csvRow: string = `${id},${commonName},"${countyFIPs}","${countyNames}",`;
     this._csvWriter$.next(csvRow);
 
     await page.close();
   }
+
+  private static async pullDataAndDeleteCSV(path: string): Promise<string[]> {
+    const fileStream = fs.createReadStream(path);
+    const lines: string[] = [];
+    const rl = readline.createInterface({
+      input: fileStream,
+      crlfDelay: Infinity
+    });
+    // Note: we use the crlfDelay option to recognize all instances of CR LF
+    // ('\r\n') in input.txt as a single line break.
+
+
+    for await (const line of rl) {
+      // Each line in input.txt will be successively available here as `line`.
+      lines.push(line);
+    }
+
+    fileStream.close();
+    fs.unlinkSync(path);
+    return lines;
+  }
+
 
   private static isValidCSV(response: HTTPResponse): boolean {
     return response.url().includes('csv') ||
