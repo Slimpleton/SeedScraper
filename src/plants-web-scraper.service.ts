@@ -126,12 +126,18 @@ export class PlantsWebScraperService {
       }, parentElement);
     }
 
-    await download.catch(async () => {
-      console.log('Skipping csv writing for ' + id);
-      await page.close();
+    // TODO figure out why we cant skip writing on failed download
+    await download.catch(async (reason : any) => {
+      console.log('Skipping csv writing for ' + id, reason);
       return;
     });
     const data: string[] = await PlantsWebScraperService.pullDataAndDeleteCSV(path.resolve(this._TEMP_DOWNLOAD_PATH, id + this._CSVExtension));
+    await page.close();
+
+    // Skip when csv not found
+    if(data.length == 0)
+      return;
+
     const countyNames: string[]= [];
     const countyFIPs: number[] = [];
     for(let i = 1; i < data.length; i++){
@@ -144,13 +150,19 @@ export class PlantsWebScraperService {
       countyFIPs.push(Number.parseInt(values[5]));
     }
 
-    const csvRow: string = `${id},${commonName},"${countyFIPs}","${countyNames}",`;
+    // HACK the info only contains county shit for the us anyways so its not a big deal but i still need to fix the overlapping counties
+    // TODO Counties have overlapping fips codes, i need the fips mapping for state to each of its corresponding counties, not one long list
+    // TODO would this be easier to read as a json?? idk everything else is csv it would suck to change it up
+    // Json would save extra space by reducing duplicate rows // More objectlike
+    // csv is less changes
+    
+    const csvRow: string = `${id},${commonName},"${countyFIPs}","${countyNames}"`;
     this._csvWriter$.next(csvRow);
-
-    await page.close();
   }
 
   private static async pullDataAndDeleteCSV(path: string): Promise<string[]> {
+    if(!fs.existsSync(path))
+      return [];
     const fileStream = fs.createReadStream(path);
     const lines: string[] = [];
     const rl = readline.createInterface({
