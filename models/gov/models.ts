@@ -396,3 +396,13 @@ export type PlantData = Readonly<{
     veneerProduct: boolean;
 }>;
 
+export type County = Readonly<{
+    name: string;
+    FIP: number;
+    stateFIP: number;
+}>;
+
+export type ExtraInfo = Readonly<{
+    counties: County[];
+    commonName: string;
+}>;

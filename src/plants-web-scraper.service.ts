@@ -1,25 +1,27 @@
 import puppeteer, { Browser, HTTPResponse } from 'puppeteer';
-import { catchError, defer, forkJoin, from, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
+import { catchError, defer, first, forkJoin, from, last, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
 import { GovPlantsDataService } from './PLANTS_data.service';
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
+import { County, ExtraInfo } from '../models/gov/models';
 
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
-  private readonly _CONCURRENT_REQUESTS: number = 10;
+  private readonly _CONCURRENT_REQUESTS: number = 20;
   private readonly _DOWNLOAD_TIMEOUT_TIME: number = 5 * 60 * 1000; // 5 min
   private readonly _DISTRIBUTION_DATA_HEADER: string = 'Distribution Data';
   private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
   private readonly _PlantProfileHeaderName: string = 'plant-profile-header';
 
+  private readonly _jsonExtension: string = '.json';
   private readonly _CSVExtension: string = '.csv';
-  private readonly _CSVName: string = 'PLANTS_EXTRA_DATA' + this._CSVExtension;
-  private readonly _CSVHeaders: string[] = ['Accepted Symbol', 'Common Name', 'County FIPS', "County Name"];
-  private readonly _csvPath = './assets/' + this._CSVName;
+  private readonly _jsonName: string = 'PLANTS_EXTRA_DATA' + this._jsonExtension;
+  private readonly _jsonPath = './assets/' + this._jsonName;
   private readonly _ngDestroy$: Subject<void> = new Subject<void>();
-  private readonly _csvWriter$: Subject<string> = new Subject<string>();
+  private readonly _jsonWriter$: Subject<string> = new Subject<string>();
+  private _jsonStarted: boolean = false;
   private readonly _browserRequest$: Observable<Browser> = from(puppeteer.launch({
     headless: true,
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
@@ -28,26 +30,33 @@ export class PlantsWebScraperService {
     takeUntil(this._ngDestroy$));
 
   constructor(private readonly _plantDataService: GovPlantsDataService) {
-    this._csvWriter$.pipe(
+    if (fs.existsSync(this._jsonPath)) {
+      fs.unlinkSync(this._jsonPath);
+    }
+
+    fs.writeFileSync(this._jsonPath, '[\r\n');
+    this._jsonStarted = true;
+    this._jsonWriter$.pipe(
+      // TODO could just accept everything, store in mem, write to csv at the end but it would be so much so i dont think we can
       tap((value) => {
-        console.log('Writing Value ' + value);
-        fs.appendFileSync(this._csvPath, value);
-        fs.appendFileSync(this._csvPath, "\r\n");
-      }))
+        // console.log('Writing Value ' + value);
+        fs.appendFileSync(this._jsonPath, value);
+
+        if (this._jsonStarted) {
+          fs.appendFileSync(this._jsonPath, ',');
+        }
+
+        fs.appendFileSync(this._jsonPath, "\r\n");
+      }),
+    )
       .subscribe();
   }
 
   public write(): Observable<any> {
-    const escapedHeaders = this._CSVHeaders.map((x: string) => '"' + x + '"').join(',') + '\r\n';
     const allIdsCSVPath = './assets/allIds' + this._CSVExtension;
 
     return this._plantDataService.getAllNativePlantIds().pipe(
       switchMap((ids: ReadonlyArray<string>) => {
-        // If file does not exist, create the file with headers
-        if (fs.existsSync(this._csvPath))
-          fs.unlinkSync(this._csvPath);
-        fs.writeFileSync(this._csvPath, escapedHeaders);
-
         if (fs.existsSync(allIdsCSVPath))
           fs.unlinkSync(allIdsCSVPath);
         fs.writeFileSync(allIdsCSVPath, ids.join(','));
@@ -127,7 +136,7 @@ export class PlantsWebScraperService {
     }
 
     // TODO figure out why we cant skip writing on failed download
-    await download.catch(async (reason : any) => {
+    await download.catch(async (reason: any) => {
       console.log('Skipping csv writing for ' + id, reason);
       return;
     });
@@ -136,35 +145,38 @@ export class PlantsWebScraperService {
     await page.close();
 
     // Skip when csv not found
-    if(data.length == 0)
+    if (data.length == 0)
       return;
 
-    const countyNames: string[]= [];
-    const countyFIPs: number[] = [];
-    for(let i = 1; i < data.length; i++){
-      const values : string[] = data[i].split(',');
+    const counties: County[] = [];
+    for (let i = 1; i < data.length; i++) {
+      const values: string[] = data[i].split(',');
       // Skip the empty county rows
-      if(values[4]?.length == 0)
+      if (values[4]?.length == 0)
         continue;
 
-      countyNames.push(values[4]);
-      countyFIPs.push(Number.parseInt(values[5]));
+      const stateFip: number = Number.parseInt(values[3]);
+      // Dictionary of state abbrev to county info
+
+      counties.push({
+        stateFIP: stateFip,
+        name: values[4],
+        FIP: Number.parseInt(values[5])
+      });
     }
 
-    // HACK the info only contains county shit for the us anyways so its not a big deal but i still need to fix the overlapping counties
-    // TODO Counties have overlapping fips codes, i need the fips mapping for state to each of its corresponding counties, not one long list
-    // TODO would this be easier to read as a json?? idk everything else is csv it would suck to change it up
-    // Json would save extra space by reducing duplicate rows // More objectlike
-    // csv is less changes
-    // use a record perhaps and then jsonify it ? would make parsing into an object easier later for us
+    const extraInfo: ExtraInfo = {
+      commonName: commonName,
+      counties: counties,
+    };
 
-    const csvRow: string = `${id},${commonName},"${countyFIPs}","${countyNames}"`;
-    this._csvWriter$.next(csvRow);
+    const json: string = JSON.stringify(extraInfo);
+    this._jsonWriter$.next(json);
   }
 
   private static async pullDataAndDeleteCSV(path: string): Promise<string[]> {
     const lines: string[] = [];
-    if(!fs.existsSync(path))
+    if (!fs.existsSync(path))
       return lines;
     const fileStream = fs.createReadStream(path);
     const rl = readline.createInterface({
@@ -194,7 +206,16 @@ export class PlantsWebScraperService {
   }
 
   public destroy(): void {
-    this._ngDestroy$.next();
-    this._ngDestroy$.complete();
+    this._jsonStarted = false;
+    this._jsonWriter$.next(']');
+
+    this._jsonWriter$.pipe(
+      last()
+    ).subscribe({
+      next: () => {
+        this._ngDestroy$.next();
+        this._ngDestroy$.complete();
+      }
+    });
   }
 }
