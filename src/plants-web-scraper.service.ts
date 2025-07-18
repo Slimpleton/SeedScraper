@@ -1,12 +1,17 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
-import { catchError, defer, first, forkJoin, from, interval, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap, zip } from 'rxjs';
+import puppeteer, { Browser, ElementHandle, HTTPResponse, Page } from 'puppeteer';
+import { catchError, defer, forkJoin, from, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
 import { GovPlantsDataService } from './PLANTS_data.service';
 import fs from 'fs';
+import path from 'path';
 
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
-  private readonly _NEW_PAGE_INTERVAL_MS = 2000;
+  private readonly _CONCURRENT_REQUESTS: number = 10;
+  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 1 * 60 * 1000;
+  private readonly _DISTRIBUTION_DATA_HEADER: string = 'DistributionData';
+  private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
+
   private readonly _CSVName: string = 'PLANTS_EXTRA_DATA.csv';
   private readonly _CSVHeaders: string[] = ['Accepted Symbol', 'Counties', 'Common Name'];
   private readonly _PlantProfileHeaderName: string = 'plant-profile-header';
@@ -14,12 +19,11 @@ export class PlantsWebScraperService {
   private readonly _ngDestroy$: Subject<void> = new Subject<void>();
   private readonly _csvWriter$: Subject<string> = new Subject<string>();
   private readonly _browserRequest$: Observable<Browser> = from(puppeteer.launch({
-    headless: false,
+    headless: true,
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
   })).pipe(
     shareReplay(1),
     takeUntil(this._ngDestroy$));
-
 
   constructor(private readonly _plantDataService: GovPlantsDataService) {
     this._csvWriter$.pipe(
@@ -49,12 +53,7 @@ export class PlantsWebScraperService {
         return forkJoin([of(ids), this._browserRequest$]);
       }),
       switchMap(([ids, browser]: [ReadonlyArray<string>, Browser]) =>
-        zip(
-          from(ids),
-          interval(this._NEW_PAGE_INTERVAL_MS)
-        ).pipe(
-          switchMap(([id, _]) => this.writeSpeciesRxjs(browser, id)))
-      ),
+        from(ids).pipe(mergeMap((id) => this.writeSpeciesRxjs(browser, id), this._CONCURRENT_REQUESTS))),
       catchError((err: any) => {
         console.error(err);
         return of();
@@ -66,38 +65,48 @@ export class PlantsWebScraperService {
   private async writeSpecies(browser: Browser, id: string) {
     const page = await browser.newPage();
     await page.goto(`${this.usdaGovPlantProfileUrl}${id}`);
+    let download: Promise<void> = new Promise((_, reject) => setTimeout(() => reject(id), this._DOWNLOAD_TIMEOUT_TIME));
+    let commonName: string = '';
 
+    page.setRequestInterception(true);
+    const client = await page.createCDPSession();
+    await client.send('Page.setDownloadBehavior', {
+      behavior: 'deny', // Prevent automatic downloads
+    });
+
+    page.on('request', (request) => {
+      request.continue();
+    });
+
+    page.on(('response'), async (response: HTTPResponse) => {
+      if (PlantsWebScraperService.isValidCSV(response)) {
+        const csvData = await response.text();
+        const filename = `${id}.${this._DISTRIBUTION_DATA_HEADER}.csv`;
+        const filepath = path.resolve(this._TEMP_DOWNLOAD_PATH, filename);
+        fs.writeFileSync(filepath, csvData);
+        download = Promise.resolve()
+      }
+    });
+
+    // TODO Might not have one if the link is broken
     const downloadLinkClass = '.download-distribution-link';
     const linkElement = await page.waitForSelector(downloadLinkClass);
     await linkElement?.click();
 
-    const downloadButton = await page.waitForSelector('a[download]');
-    if (downloadButton) {
-      const newTabUrl: string = await page.evaluate((downloadButton: Element) => {
-        const tabUrl: string | null = downloadButton.getAttribute('href');
-        if (tabUrl == null)
-          throw new Error('null download');
+    const downloadButton = await page.waitForSelector('a[download]')
+      .catch((reason: any) => console.error(reason));
 
-        return tabUrl;
-      }, downloadButton);
-
-      console.log(newTabUrl);
-
-      const popup = await downloadButton.click().then(() =>
-        browser.waitForTarget((target) => target.url().includes(newTabUrl)));
-
-      const popupPage = await popup.asPage();
-      popupPage.setRequestInterception(true);
-      const json = popupPage.on('request', async (request) => {
-        return await request.response()?.text();
-      });
-
-      console.log(json);
+    if (downloadButton && !(await page.evaluate((downloadButton: HTMLAnchorElement) => downloadButton.href, downloadButton)).endsWith('undefined'))
+      await downloadButton.click();
+    else {
+      download = Promise.resolve();
+      console.log('invalid file download for ', id);
     }
+
 
     const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
     if (parentElement) {
-      const commonName = await page.evaluate((parentEl: Element) => {
+      commonName = await page.evaluate((parentEl: Element) => {
         const childrenElements = parentEl.children;
 
         for (let i = 1; i < childrenElements.length; i++) {
@@ -105,22 +114,30 @@ export class PlantsWebScraperService {
 
           if (childElement &&
             childElement.tagName === 'H2' &&
-            childElement.textContent?.trim()) {
-
-            const escapedText = childElement.textContent.trim().replace(/"/g, '""');
-            return escapedText;
+            childElement.textContent?.trim() &&
+            childElement.textContent.trim() !== 'Subheader') {
+            return childElement.textContent.trim().replace(/"/g, '""');
           }
         }
 
         return "";
       }, parentElement);
-
-      const csvRow: string = `"${id}","${null}","${commonName}"`;
-      this._csvWriter$.next(csvRow);
-      console.log(csvRow);
     }
 
+    await download;
+
+    // TODO parse the csv and deleteio ?? 
+
+    const csvRow: string = `"${id}","${null}","${commonName}"`;
+    this._csvWriter$.next(csvRow);
+
     await page.close();
+  }
+
+  private static isValidCSV(response: HTTPResponse): boolean {
+    return response.url().includes('csv') ||
+      response.url().includes('DistributionData') ||
+      response.headers()['content-type']?.includes('text/csv');
   }
 
   private writeSpeciesRxjs(browser: Browser, id: string): Observable<void> {
