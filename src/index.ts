@@ -1,4 +1,4 @@
-import { finalize, Observable } from "rxjs";
+import { finalize } from "rxjs";
 import { PlantsWebScraperService } from "./plants-web-scraper.service";
 import { GovPlantsDataService } from "./PLANTS_data.service";
 

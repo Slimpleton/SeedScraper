@@ -1,5 +1,5 @@
 import puppeteer, { Browser, HTTPResponse } from 'puppeteer';
-import { catchError, defer, first, forkJoin, from, last, mergeMap, Observable, of, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
+import { catchError, defer, forkJoin, from, last, mergeMap, Observable, of, retry, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
 import { GovPlantsDataService } from './PLANTS_data.service';
 import fs from 'fs';
 import path from 'path';
@@ -9,8 +9,8 @@ import { County, ExtraInfo } from '../models/gov/models';
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
-  private readonly _CONCURRENT_REQUESTS: number = 20;
-  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 5 * 60 * 1000; // 5 min
+  private readonly _CONCURRENT_REQUESTS: number = 3;
+  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 10 * 60 * 1000; // 10 min
   private readonly _DISTRIBUTION_DATA_HEADER: string = 'Distribution Data';
   private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
   private readonly _PlantProfileHeaderName: string = 'plant-profile-header';
@@ -63,8 +63,13 @@ export class PlantsWebScraperService {
 
         return forkJoin([of(ids), this._browserRequest$]);
       }),
+      tap(([ids, browser]: [ReadonlyArray<string>, Browser]) => {
+        // const cdpSession = await browser.target().createCDPSession();
+        
+      }),
       switchMap(([ids, browser]: [ReadonlyArray<string>, Browser]) =>
         from(ids).pipe(mergeMap((id) => this.writeSpeciesRxjs(browser, id), this._CONCURRENT_REQUESTS))),
+      retry(3),
       catchError((err: any) => {
         console.error(err);
         return of();
@@ -74,15 +79,21 @@ export class PlantsWebScraperService {
   }
 
   private async writeSpecies(browser: Browser, id: string) {
+    
     const page = await browser.newPage();
-    await page.goto(`${this.usdaGovPlantProfileUrl}${id}`);
+    await page.goto(`${this.usdaGovPlantProfileUrl}${id}`).catch((err) => {
+      console.error(err);
+      return;
+    });
+
     let download: Promise<void> = new Promise((_, reject) => setTimeout(() => reject(id), this._DOWNLOAD_TIMEOUT_TIME));
     let commonName: string = '';
 
     page.setRequestInterception(true);
     const client = await page.createCDPSession();
     await client.send('Page.setDownloadBehavior', {
-      behavior: 'deny', // Prevent automatic downloads
+      behavior: 'allow', // Prevent automatic downloads
+      downloadPath: path.resolve('./downloads'),
     });
 
     page.on('request', (request) => {
@@ -102,17 +113,24 @@ export class PlantsWebScraperService {
 
     // TODO Might not have one if the link is broken
     const downloadLinkClass = '.download-distribution-link';
-    const linkElement = await page.waitForSelector(downloadLinkClass);
-    await linkElement?.click();
+    const linkElement = await page.waitForSelector(downloadLinkClass).catch((err) => {
+      console.error(err);
+      download = this.invalidDownload(download, id);
+    });
+
+    if(linkElement)
+      await linkElement?.click();
 
     const downloadButton = await page.waitForSelector('a[download]')
-      .catch((reason: any) => console.error(reason));
+      .catch((err) => {
+        console.error(err);
+        download = this.invalidDownload(download, id);
+      });
 
     if (downloadButton && !(await page.evaluate((downloadButton: HTMLAnchorElement) => downloadButton.href, downloadButton)).endsWith('undefined'))
       await downloadButton.click();
     else {
-      download = Promise.resolve();
-      console.log('invalid file download for ', id);
+      download = this.invalidDownload(download, id);
     }
 
     const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
@@ -136,7 +154,7 @@ export class PlantsWebScraperService {
     }
 
     // TODO figure out why we cant skip writing on failed download
-    await download.catch(async (reason: any) => {
+    await download.catch((reason: any) => {
       console.log('Skipping csv writing for ' + id, reason);
       return;
     });
@@ -172,6 +190,12 @@ export class PlantsWebScraperService {
 
     const json: string = JSON.stringify(extraInfo);
     this._jsonWriter$.next(json);
+  }
+
+  private invalidDownload(download: Promise<void>, id: string) {
+    download = Promise.resolve();
+    console.log('invalid file download for ', id);
+    return download;
   }
 
   private static async pullDataAndDeleteCSV(path: string): Promise<string[]> {
