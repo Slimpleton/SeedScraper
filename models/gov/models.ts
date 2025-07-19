@@ -403,6 +403,7 @@ export type County = Readonly<{
 }>;
 
 export type ExtraInfo = Readonly<{
+    symbol: string;
     counties: County[];
     commonName: string;
 }>;

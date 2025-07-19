@@ -9,11 +9,12 @@ import { County, ExtraInfo } from '../models/gov/models';
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
-  private readonly _CONCURRENT_REQUESTS: number = 3;
+  private readonly _CONCURRENT_REQUESTS: number = 6;
   private readonly _DOWNLOAD_TIMEOUT_TIME: number = 10 * 60 * 1000; // 10 min
   private readonly _DISTRIBUTION_DATA_HEADER: string = 'Distribution Data';
   private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
   private readonly _PlantProfileHeaderName: string = 'plant-profile-header';
+  private readonly _RETRIES: number = 3;
 
   private readonly _jsonExtension: string = '.json';
   private readonly _CSVExtension: string = '.csv';
@@ -63,13 +64,8 @@ export class PlantsWebScraperService {
 
         return forkJoin([of(ids), this._browserRequest$]);
       }),
-      tap(([ids, browser]: [ReadonlyArray<string>, Browser]) => {
-        // const cdpSession = await browser.target().createCDPSession();
-        
-      }),
       switchMap(([ids, browser]: [ReadonlyArray<string>, Browser]) =>
-        from(ids).pipe(mergeMap((id) => this.writeSpeciesRxjs(browser, id), this._CONCURRENT_REQUESTS))),
-      retry(3),
+        from(ids).pipe(mergeMap((id) => this.writeSpeciesRxjs(browser, id).pipe(retry(this._RETRIES)), this._CONCURRENT_REQUESTS))),
       catchError((err: any) => {
         console.error(err);
         return of();
@@ -79,7 +75,6 @@ export class PlantsWebScraperService {
   }
 
   private async writeSpecies(browser: Browser, id: string) {
-    
     // try new browser context so its easier to target specific downloads ??
     const browserContext = await browser.createBrowserContext();
     const page = await browserContext.newPage();
@@ -95,7 +90,6 @@ export class PlantsWebScraperService {
     const client = await page.createCDPSession();
     await client.send('Page.setDownloadBehavior', {
       behavior: 'deny', // Prevent automatic downloads
-      // downloadPath: path.resolve('./downloads'),
     });
 
     page.on('request', (request) => {
@@ -116,11 +110,11 @@ export class PlantsWebScraperService {
     // TODO Might not have one if the link is broken
     const downloadLinkClass = '.download-distribution-link';
     const linkElement = await page.waitForSelector(downloadLinkClass).catch((err) => {
-      console.error(err);
+      console.error(err, id);
       download = this.invalidDownload(download, id);
     });
 
-    if(linkElement)
+    if (linkElement)
       await linkElement?.click();
 
     const downloadButton = await page.waitForSelector('a[download]')
@@ -130,12 +124,11 @@ export class PlantsWebScraperService {
       });
 
     if (downloadButton && !(await page.evaluate((downloadButton: HTMLAnchorElement) => downloadButton.href, downloadButton)).endsWith('undefined'))
-      await downloadButton.click();
-    else {
+      await downloadButton.click().catch((err) => console.error(err, id));
+    else
       download = this.invalidDownload(download, id);
-    }
 
-    const parentElement = await page.waitForSelector(this._PlantProfileHeaderName);
+    const parentElement = await page.waitForSelector(this._PlantProfileHeaderName).catch((err) => console.error(err, id));
     if (parentElement) {
       commonName = await page.evaluate((parentEl: Element) => {
         const childrenElements = parentEl.children;
@@ -151,8 +144,11 @@ export class PlantsWebScraperService {
           }
         }
 
-        return "";
-      }, parentElement);
+        return '';
+      }, parentElement).catch((err) => {
+        console.error(err, id);
+        return '';
+      });
     }
 
     // TODO figure out why we cant skip writing on failed download
@@ -161,7 +157,11 @@ export class PlantsWebScraperService {
       return;
     });
 
-    const data: string[] = await PlantsWebScraperService.pullDataAndDeleteCSV(path.resolve(this._TEMP_DOWNLOAD_PATH, id + this._CSVExtension));
+    const data: string[] = await PlantsWebScraperService.pullDataAndDeleteCSV(path.resolve(this._TEMP_DOWNLOAD_PATH, id + this._CSVExtension)).catch((err) => {
+      console.error(err, id);
+      return [];
+    });
+
     await page.close();
     await browserContext.close();
 
@@ -187,6 +187,7 @@ export class PlantsWebScraperService {
     }
 
     const extraInfo: ExtraInfo = {
+      symbol: id,
       commonName: commonName,
       counties: counties,
     };
