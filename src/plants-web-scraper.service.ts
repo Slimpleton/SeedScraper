@@ -9,8 +9,8 @@ import { County, ExtraInfo } from '../models/gov/models';
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
-  private readonly _CONCURRENT_REQUESTS: number = 6;
-  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 10 * 60 * 1000; // 10 min
+  private readonly _CONCURRENT_REQUESTS: number = 5;
+  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 5 * 60 * 1000; // 10 min
   private readonly _DISTRIBUTION_DATA_HEADER: string = 'Distribution Data';
   private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
   private readonly _PlantProfileHeaderName: string = 'plant-profile-header';
@@ -84,6 +84,10 @@ export class PlantsWebScraperService {
     });
 
     let download: Promise<void> = new Promise((_, reject) => setTimeout(() => reject(id), this._DOWNLOAD_TIMEOUT_TIME));
+    download.catch((err) => {
+      console.error(err, id);
+      return;
+    })
     let commonName: string = '';
 
     await page.setRequestInterception(true);
@@ -119,7 +123,7 @@ export class PlantsWebScraperService {
 
     const downloadButton = await page.waitForSelector('a[download]')
       .catch((err) => {
-        console.error(err);
+        console.error(err, id);
         download = this.invalidDownload(download, id);
       });
 
@@ -162,8 +166,8 @@ export class PlantsWebScraperService {
       return [];
     });
 
-    await page.close();
-    await browserContext.close();
+    await page.close().catch((err) => console.error(err, id));
+    await browserContext.close().catch((err) => console.error(err, id));
 
     // Skip when csv not found
     if (data.length == 0)
