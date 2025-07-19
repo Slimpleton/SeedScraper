@@ -80,7 +80,9 @@ export class PlantsWebScraperService {
 
   private async writeSpecies(browser: Browser, id: string) {
     
-    const page = await browser.newPage();
+    // try new browser context so its easier to target specific downloads ??
+    const browserContext = await browser.createBrowserContext();
+    const page = await browserContext.newPage();
     await page.goto(`${this.usdaGovPlantProfileUrl}${id}`).catch((err) => {
       console.error(err);
       return;
@@ -89,11 +91,11 @@ export class PlantsWebScraperService {
     let download: Promise<void> = new Promise((_, reject) => setTimeout(() => reject(id), this._DOWNLOAD_TIMEOUT_TIME));
     let commonName: string = '';
 
-    page.setRequestInterception(true);
+    await page.setRequestInterception(true);
     const client = await page.createCDPSession();
     await client.send('Page.setDownloadBehavior', {
-      behavior: 'allow', // Prevent automatic downloads
-      downloadPath: path.resolve('./downloads'),
+      behavior: 'deny', // Prevent automatic downloads
+      // downloadPath: path.resolve('./downloads'),
     });
 
     page.on('request', (request) => {
@@ -161,6 +163,7 @@ export class PlantsWebScraperService {
 
     const data: string[] = await PlantsWebScraperService.pullDataAndDeleteCSV(path.resolve(this._TEMP_DOWNLOAD_PATH, id + this._CSVExtension));
     await page.close();
+    await browserContext.close();
 
     // Skip when csv not found
     if (data.length == 0)
