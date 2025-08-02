@@ -18,11 +18,18 @@ export class PlantsWebScraperService {
 
   private readonly _jsonExtension: string = '.json';
   private readonly _CSVExtension: string = '.csv';
-  private readonly _jsonName: string = 'PLANTS_EXTRA_DATA' + this._jsonExtension;
+  private readonly FILE_TITLE = 'PLANTS_EXTRA_DATA';
+
+  private readonly _jsonName: string = this.FILE_TITLE + this._jsonExtension;
   private readonly _jsonPath = './assets/' + this._jsonName;
+  private readonly _csvName: string = this.FILE_TITLE + this._CSVExtension;
+  private readonly _csvPath: string = './assets/' + this._csvName;
   private readonly _ngDestroy$: Subject<void> = new Subject<void>();
   private readonly _jsonWriter$: Subject<string> = new Subject<string>();
+  private readonly _csvWriter$: Subject<ExtraInfo> = new Subject<ExtraInfo>();
   private _jsonStarted: boolean = false;
+  private _csvStarted: boolean = false;
+
   private readonly _browserRequest$: Observable<Browser> = from(puppeteer.launch({
     headless: true,
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
@@ -31,26 +38,38 @@ export class PlantsWebScraperService {
     takeUntil(this._ngDestroy$));
 
   constructor(private readonly _plantDataService: GovPlantsDataService) {
-    if (fs.existsSync(this._jsonPath)) {
-      fs.unlinkSync(this._jsonPath);
+    // if (fs.existsSync(this._jsonPath)) {
+    //   fs.unlinkSync(this._jsonPath);
+    // }
+    if (fs.existsSync(this._csvPath)) {
+      fs.unlinkSync(this._csvPath);
     }
 
-    fs.writeFileSync(this._jsonPath, '[\r\n');
-    this._jsonStarted = true;
-    this._jsonWriter$.pipe(
-      // TODO could just accept everything, store in mem, write to csv at the end but it would be so much so i dont think we can
-      tap((value) => {
-        // console.log('Writing Value ' + value);
-        fs.appendFileSync(this._jsonPath, value);
+    fs.writeFileSync(this._csvPath, '"Symbol","Common Name","Counties"\r\n');
+    this._csvStarted = true;
 
-        if (this._jsonStarted) {
-          fs.appendFileSync(this._jsonPath, ',');
-        }
-
-        fs.appendFileSync(this._jsonPath, "\r\n");
+    this._csvWriter$.pipe(
+      tap((extraInfo: ExtraInfo) => {
+        const counties = JSON.stringify(extraInfo.counties).replace(/"/g, '""');
+        fs.appendFileSync(this._csvPath, `"${extraInfo.symbol}","${extraInfo.commonName}","${counties}"\r\n`);
       }),
-    )
-      .subscribe();
+    ).subscribe();
+
+    // fs.writeFileSync(this._jsonPath, '[\r\n');
+    // this._jsonStarted = true;
+    // this._jsonWriter$.pipe(
+    //   // TODO could just accept everything, store in mem, write to csv at the end but it would be so much so i dont think we can
+    //   tap((value) => {
+    //     // console.log('Writing Value ' + value);
+    //     fs.appendFileSync(this._jsonPath, value);
+
+    //     if (this._jsonStarted) {
+    //       fs.appendFileSync(this._jsonPath, ',');
+    //     }
+
+    //     fs.appendFileSync(this._jsonPath, "\r\n");
+    //   }),
+    // ).subscribe();
   }
 
   public write(): Observable<any> {
@@ -185,7 +204,6 @@ export class PlantsWebScraperService {
 
       counties.push({
         stateFIP: stateFip,
-        name: values[4],
         FIP: Number.parseInt(values[5])
       });
     }
@@ -196,8 +214,9 @@ export class PlantsWebScraperService {
       counties: counties,
     };
 
-    const json: string = JSON.stringify(extraInfo);
-    this._jsonWriter$.next(json);
+    this._csvWriter$.next(extraInfo);
+    // const json: string = JSON.stringify(extraInfo);
+    // this._jsonWriter$.next(json);
   }
 
   private invalidDownload(download: Promise<void>, id: string) {

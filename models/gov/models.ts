@@ -397,7 +397,6 @@ export type PlantData = Readonly<{
 }>;
 
 export type County = Readonly<{
-    name: string;
     FIP: number;
     stateFIP: number;
 }>;
