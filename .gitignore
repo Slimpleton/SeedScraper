@@ -3,4 +3,5 @@ package-lock.json
 dist/
 downloads/
 assets/allIds.csv
-assets/PLANTS_EXTRA_DATA.*
+assets/PLANTS_EXTRA_DATA.csv
+assets/PLANTS_EXTRA_DATA.
