@@ -1,7 +1,6 @@
 node_modules/
 package-lock.json
 dist/
-allIds.csv
 downloads/
-PLANTS_EXTRA_DATA.csv
-PLANTS_EXTRA_DATA.json
+assets/allIds.csv
+assets/PLANTS_EXTRA_DATA.*
