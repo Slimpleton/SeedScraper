@@ -1,16 +1,16 @@
 import puppeteer, { Browser, HTTPResponse } from 'puppeteer';
-import { catchError, defer, forkJoin, from, last, mergeMap, Observable, of, retry, shareReplay, Subject, switchMap, takeUntil, tap } from 'rxjs';
+import { catchError, defer, forkJoin, from, last, map, mergeMap, Observable, of, retry, shareReplay, skip, Subject, switchMap, takeUntil, tap } from 'rxjs';
 import { GovPlantsDataService } from './PLANTS_data.service';
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
-import { County, ExtraInfo } from '../models/gov/models';
+import { ExtraInfo } from '../models/gov/models';
 
 export class PlantsWebScraperService {
   public readonly usdaGovPlantProfileUrl: string = 'https://plants.usda.gov/plant-profile/';
 
-  private readonly _CONCURRENT_REQUESTS: number = 5;
-  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 5 * 60 * 1000; // 10 min
+  private readonly _CONCURRENT_REQUESTS: number = 15;
+  private readonly _DOWNLOAD_TIMEOUT_TIME: number = 15 * 60 * 1000; // 10 min
   private readonly _DISTRIBUTION_DATA_HEADER: string = 'Distribution Data';
   private readonly _TEMP_DOWNLOAD_PATH: string = 'downloads/';
   private readonly _PlantProfileHeaderName: string = 'plant-profile-header';
@@ -30,6 +30,8 @@ export class PlantsWebScraperService {
   private _jsonStarted: boolean = false;
   private _csvStarted: boolean = false;
 
+  private readonly _writtenCSVSymbols: Set<string> = new Set<string>();
+
   private readonly _browserRequest$: Observable<Browser> = from(puppeteer.launch({
     headless: true,
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
@@ -38,22 +40,16 @@ export class PlantsWebScraperService {
     takeUntil(this._ngDestroy$));
 
   constructor(private readonly _plantDataService: GovPlantsDataService) {
-    // if (fs.existsSync(this._jsonPath)) {
-    //   fs.unlinkSync(this._jsonPath);
-    // }
-    if (fs.existsSync(this._csvPath)) {
-      fs.unlinkSync(this._csvPath);
-    }
-
-    fs.writeFileSync(this._csvPath, '"Symbol","Common Name","Counties"\r\n');
-    this._csvStarted = true;
+    from(this.readFromFileOrCreate()).subscribe();
 
     this._csvWriter$.pipe(
       tap((extraInfo: ExtraInfo) => {
 
         const counties: string = extraInfo.combinedFIP.join('|');
-
-        fs.appendFileSync(this._csvPath, `"${extraInfo.symbol}","${extraInfo.commonName}","${counties}"\r\n`);
+        if (!this._writtenCSVSymbols.has(extraInfo.symbol))
+          fs.appendFileSync(this._csvPath, `"${extraInfo.symbol}","${extraInfo.commonName}","${counties}"\r\n`);
+        else
+          console.log(extraInfo.symbol + ' is already written');
       }),
     ).subscribe();
 
@@ -72,6 +68,32 @@ export class PlantsWebScraperService {
     //     fs.appendFileSync(this._jsonPath, "\r\n");
     //   }),
     // ).subscribe();
+  }
+
+  private async readFromFileOrCreate(): Promise<void> {
+    // if (fs.existsSync(this._jsonPath)) {
+    //   fs.unlinkSync(this._jsonPath);
+    // }
+
+    if (fs.existsSync(this._csvPath)) {
+      const fileStream = fs.createReadStream(this._csvPath);
+      const rl = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity
+      });
+      // Note: we use the crlfDelay option to recognize all instances of CR LF
+      // TODO should write to the already written symbol file?
+      for await (const line of rl) {
+        const symbol: string = line.substring(1, line.indexOf('"', 1));
+        console.log(symbol);
+        this._writtenCSVSymbols.add(symbol);
+      }
+      fileStream.close();
+    } else {
+      fs.writeFileSync(this._csvPath, '"Symbol","Common Name","Counties"\r\n');
+    }
+
+    this._csvStarted = true;
   }
 
   public write(): Observable<any> {
