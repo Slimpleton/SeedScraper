@@ -50,7 +50,8 @@ export class PlantsWebScraperService {
 
     this._csvWriter$.pipe(
       tap((extraInfo: ExtraInfo) => {
-        const counties = JSON.stringify(extraInfo.combinedFIP).replace(/"/g, '""');
+
+        const counties: string = extraInfo.combinedFIP.join('|');
 
         fs.appendFileSync(this._csvPath, `"${extraInfo.symbol}","${extraInfo.commonName}","${counties}"\r\n`);
       }),
