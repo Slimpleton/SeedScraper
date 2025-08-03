@@ -201,7 +201,6 @@ export class PlantsWebScraperService {
       if (values[4]?.length == 0)
         continue;
 
-
       // Dictionary of state abbrev to county info
       const formattedStateFip = values[3].padStart(2, '0');
       const formattedCountyFip = values[5].padStart(3, '0');
