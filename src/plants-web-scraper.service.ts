@@ -50,7 +50,8 @@ export class PlantsWebScraperService {
 
     this._csvWriter$.pipe(
       tap((extraInfo: ExtraInfo) => {
-        const counties = JSON.stringify(extraInfo.counties).replace(/"/g, '""');
+        const counties = JSON.stringify(extraInfo.combinedFIP).replace(/"/g, '""');
+
         fs.appendFileSync(this._csvPath, `"${extraInfo.symbol}","${extraInfo.commonName}","${counties}"\r\n`);
       }),
     ).subscribe();
@@ -192,26 +193,32 @@ export class PlantsWebScraperService {
     if (data.length == 0)
       return;
 
-    const counties: County[] = [];
+    // const counties: County[] = [];
+    const combinedFips: string[] = [];
     for (let i = 1; i < data.length; i++) {
       const values: string[] = data[i].split(',');
       // Skip the empty county rows
       if (values[4]?.length == 0)
         continue;
 
-      const stateFip: number = Number.parseInt(values[3]);
-      // Dictionary of state abbrev to county info
 
-      counties.push({
-        stateFIP: stateFip,
-        FIP: Number.parseInt(values[5])
-      });
+      // Dictionary of state abbrev to county info
+      const formattedStateFip = values[3].padStart(2, '0');
+      const formattedCountyFip = values[5].padStart(3, '0');
+
+      combinedFips.push(formattedStateFip + formattedCountyFip);
+
+      // counties.push({
+      //   stateFIP: stateFip,
+      //   FIP: Number.parseInt(values[5])
+      // });
     }
 
     const extraInfo: ExtraInfo = {
       symbol: id,
       commonName: commonName,
-      counties: counties,
+      combinedFIP: combinedFips
+      // counties: counties,
     };
 
     this._csvWriter$.next(extraInfo);

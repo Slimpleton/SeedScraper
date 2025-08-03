@@ -401,8 +401,10 @@ export type County = Readonly<{
     stateFIP: number;
 }>;
 
+
 export type ExtraInfo = Readonly<{
     symbol: string;
-    counties: County[];
+    combinedFIP: string[];
+    // counties: County[];
     commonName: string;
 }>;
